@@ -44,18 +44,18 @@ var mapBoundariesLevels = {
     source_layer: "boundaries_admin_0",
     minZoom: 0,
     maxZoom: 5,
-    vtPropField: 'country_code',
-    dataPropField: 'adm0',
+    vtPropField: 'id',//'country_code',
+    dataPropField: 'adm0_id',
     colorStops: [['', "rgba(0,255,0,.5)"]],
     heightStops: [[0,0]]
-  },adm1: {
+  }, adm1: {
     level: 1,
     source: "admin-1",
     source_layer: "boundaries_admin_1",
     minZoom: 5,
     maxZoom: 9,
-    vtPropField: 'name',
-    dataPropField: 'adm1',
+    vtPropField: 'id',
+    dataPropField: 'adm1_id',
     colorStops: [['', "rgba(128,0,0,0)"]],
     heightStops: [[0,0]]
   },adm2: {
@@ -64,8 +64,8 @@ var mapBoundariesLevels = {
     source_layer: "boundaries_admin_2",
     minZoom: 9,
     maxZoom: 16,
-    vtPropField: 'name',
-    dataPropField: 'adm2',
+    vtPropField: 'id',
+    dataPropField: 'adm2_id',
     colorStops: [['', "rgba(0,0,128,0)"]],
     heightStops: [[0,0]]
   },adm3: {
@@ -74,12 +74,11 @@ var mapBoundariesLevels = {
     source_layer: "boundaries_admin_3",
     minZoom: 16,
     maxZoom: 22,
-    vtPropField: 'name',
-    dataPropField: 'adm3',
+    vtPropField: 'id',
+    dataPropField: 'adm3_id',
     colorStops: [['', "rgba(0,255,0,0)"]],
     heightStops: [[0,0]]
   }
-
 }
 
 function getCurrentlyVisibleLayer() {
@@ -89,9 +88,13 @@ function getCurrentlyVisibleLayer() {
   Object.keys(mapBoundariesLevels).forEach(function(levelKey) {
     var level = mapBoundariesLevels[levelKey];
     if((level.minZoom <= currZoom) && (currZoom <= level.maxZoom)) {
-      result = level;
+      var testLayer = map.getLayer(level.source+'_base_fill');
+      if(testLayer) {
+        result = level;
+      }
     }
   })
+
   return result;
 }
 
@@ -108,9 +111,15 @@ function initializeMap() {
         //TODO: maxBounds from controller variables
     });
     map.on('load', configureMap);
+    map.on('click', function (e) {
+      var features = map.queryRenderedFeatures(e.point);
+      console.log("On click: ", features);
+    });
 }
 
 function configureMap() {
+  var nav = new mapboxgl.NavigationControl();
+  map.addControl(nav, 'top-left');
   map.addSource("admin-0", {
       type: "vector",
       url: "mapbox://mapbox.enterprise-boundaries-a0-v1"
@@ -134,6 +143,7 @@ function configureMap() {
   Object.keys(mapBoundariesLevels).forEach(function(currKey) {
   // for each level we want a fill (extruded) and a border
     var boundary = mapBoundariesLevels[currKey];
+    console.log('Adding layer to map:', boundary.source+"_base_fill");
     map.addLayer({
         "id": boundary.source + "_base_fill",
         "type": "fill-extrusion",
@@ -143,8 +153,8 @@ function configureMap() {
         maxzoom: boundary.maxZoom,
         "paint": {
           "fill-extrusion-color": "green",
-          "fill-extrusion-opacity": 1,
-          "fill-extrusion-height": 60000
+          "fill-extrusion-opacity": .6,
+          "fill-extrusion-height": 0
         }
     }, 'waterway-label');
 
@@ -158,26 +168,31 @@ function configureMap() {
           "source-layer": boundary.source_layer,
           layout: {},
           paint: {
-              "line-color": "blue",
+              "line-color": "darkgray",
               "line-width": 1
           }
       });
   });
   currentlyVisibleLayer = getCurrentlyVisibleLayer();
   console.log('At start the visible layer is', currentlyVisibleLayer);
-  setStops(dataLookup, currentlyVisibleLayer);
+  setStops(dataLookup, currentlyVisibleLayer, map.queryRenderedFeatures());
   //Setting the map events here, they require the layers have been
   //added already
   map.on('zoom', function() {
-    console.log('Map zoom level is :', map.getZoom());
+//    console.log('Map zoom level is :', map.getZoom());
     //when the user zooms to a level that changes the visible layer
-    // then we need to rebuild the query accordingly and rebuild the stops
+    // then we need to rebuild the query accordingly
     var visibleLayerAfterZoom = getCurrentlyVisibleLayer();
     if(visibleLayerAfterZoom.source !== currentlyVisibleLayer.source) {
       console.log("Changing visible layer on zoom");
       currentlyVisibleLayer = visibleLayerAfterZoom;
+      var currGroup = controller.dataAccessors['Group By'].getGroup();
+      currGroup.name = currentlyVisibleLayer.dataPropField;
+      //TODO: adjust limit dynamically to the number of featuers in the layer (or number of visible features, if we can do that)
+console.log('Setting new group ', currentlyVisibleLayer.dataPropField, ' for group ', currGroup);
+          controller.dataAccessors['Group By'].setGroup((currentlyVisibleLayer.dataPropField, currGroup));
       //TODO: if we are filtering then we need to update filters here
-      setStops(dataLookup, currentlyVisibleLayer);
+      // Changing the group by will cause controller.update, which does this: setStops(dataLookup, currentlyVisibleLayer, map.queryRenderedFeatures());
     }
   });
   map.on('moveend', function() {
@@ -203,7 +218,7 @@ controller.update = function(data, progress) {
     if(map !== null) {
         var currLayer = getCurrentlyVisibleLayer();
         if(currLayer) {
-            setStops(dataLookup, currLayer);
+            setStops(dataLookup, currLayer, map.queryRenderedFeatures());
         }
     }
 
@@ -224,50 +239,58 @@ controller.update = function(data, progress) {
       return metrics;
   }
 
-function setStops(data, layer) {
+function setStops(data, layer, features) {
+  console.log('setting stops for ', layer, ' against data ', data);
     var stopsArray = [];
     var heightStopsArray = [];
+    var defaultColor = 'gray';
+    var defaultHeight = 0;
+    //TODO: only for features in currently visible layer
 
     Object.keys(dataLookup).forEach(function(currAttributeKey) {
       var val = dataLookup[currAttributeKey];
-      var metrics = getMetrics();
-      var currentMetricVal = metrics.Color.raw(val);
-      var fillColor = metrics.Color.color(dataLookup[val.group]);
-      var red = parseInt(fillColor.substring(1,3), 16);
-      var green = parseInt(fillColor.substring(3,5), 16);
-      var blue = parseInt(fillColor.substring(5), 16);
-      var rgba = "rgba(" + red + "," + green + "," + blue + ",1)";
-      //if we have a metric use it as the color stop, otherwise use the count
-      if(typeof(val.current.metrics) !== 'undefined') {
-
-      }
-      stopsArray.push([val.group[0], rgba]);
+      if(val.group[0] !== null) { //Mapbox GL doesn't like stops with null
+        var metrics = getMetrics();
+        var currentMetricVal = metrics.Color.raw(val);
+        var fillColor = metrics.Color.color(dataLookup[val.group]);
+        var red = parseInt(fillColor.substring(1,3), 16);
+        var green = parseInt(fillColor.substring(3,5), 16);
+        var blue = parseInt(fillColor.substring(5), 16);
+        var rgba = "rgba(" + red + "," + green + "," + blue + ",0.8)";
+        stopsArray.push([val.group[0], rgba]);
 //      var height = dataLookup[feature.properties.GEOID].current.count < 65000 ? dataLookup[feature.properties.name].current.count : 65000;
 //      heightStopsArray.push([feature.properties.GEOID, height]);
+      }
     });
+
 /*
-    source._data.features.forEach(function(feature) {
+    features.forEach(function(feature) {
         //look up the color using the Zoomdata data and the Zoomdata colors
-        if(feature.properties.GEOID in dataLookup) {
-            var fillColor = getMetrics().Color.color(dataLookup[feature.properties.GEOID]);
-            var red = parseInt(fillColor.substring(1,3), 16);
-            var green = parseInt(fillColor.substring(3,5), 16);
-            var blue = parseInt(fillColor.substring(5), 16);
-            var rgba = "rgba(" + red + "," + green + "," + blue + ",1)";
-            stopsArray.push([feature.properties.GEOID, rgba])
-            var height = dataLookup[feature.properties.GEOID].current.count < 65000 ? dataLookup[feature.properties.name].current.count : 65000;
-            heightStopsArray.push([feature.properties.GEOID, height]);
+        var currFieldName = layer.vtPropField;
+        console.log(feature.layer.id);
+        if((feature.layer.id === layer.source+'_base_fill') && (feature.properties[currFieldName] in dataLookup)) { //TODO: property name different for layers
+            console.log('found feature match:', feature.properties[currFieldName])
+              var fillColor = getMetrics().Color.color(dataLookup[feature.properties.name]);
+              var red = parseInt(fillColor.substring(1,3), 16);
+              var green = parseInt(fillColor.substring(3,5), 16);
+              var blue = parseInt(fillColor.substring(5), 16);
+              var rgba = "rgba(" + red + "," + green + "," + blue + ",1)";
+              stopsArray.push([feature.properties[currFieldName], rgba])
+              var height = dataLookup[feature.properties[currFieldName]].current.count < 65000 ? dataLookup[feature.properties[currFieldName]].current.count : 65000;
+              heightStopsArray.push([feature.properties[currFieldName], height]);
         } else {
-            stopsArray.push([feature.properties.GEOID, defaultColor]);
-            heightStopsArray.push([feature.properties.GEOID, defaultHeight]);
+//            stopsArray.push([feature.properties[currFieldName], defaultColor]);
+//            heightStopsArray.push([feature.properties[currFieldName], defaultHeight]);
         }
     });
 */
-//    map.setPaintProperty(layer.source+'_base_fill', 'fill-extrusion-color', {
-//                  property:layer.vtPropField,
-//                  type: 'categorical',
-//                  stops: stopsArray
-//        } );
+console.log('setting stops for layer ', layer.source+'_base_fill', " on property", layer.vtPropField);
+    map.setPaintProperty(layer.source+'_base_fill', 'fill-extrusion-color', {
+                  property: layer.vtPropField,
+                  type: 'categorical',
+                  stops: stopsArray,
+                  default: 'lightgray'
+        } );
 /*
     map.setPaintProperty(layer.id, 'fill-extrusion-opacity', 0.5);
     map.setPaintProperty(layer.id, 'fill-extrusion-height', {
@@ -282,3 +305,10 @@ controller.resize = function(width, height, size) {
     // Called when the widget is resized
     if(map) { map.resize(); }
 };
+
+controller.createAxisLabel({
+  picks: 'Color', // Variable Name
+  orientation: 'horizontal',
+  position: 'bottom',
+  popoverTitle: 'Metric'
+});
