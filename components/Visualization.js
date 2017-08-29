@@ -27,6 +27,7 @@ mb_js.onload = function() {
     initializeMap();
 };
 
+var heightFactor = 100; //TODO: pull from chart variable so user can configure
 
 controller.element.appendChild(mb_js);
 controller.element.appendChild(mb_css);
@@ -34,16 +35,24 @@ controller.element.appendChild(mapDiv);
 
 //The variables set in the chart properties drive what layers are displayed.  This
 //chart uses administrative boundaries.  Users can choose which ones, level 0 through
-//level 3 are supported.  The property for each layer is selected; if the user
-//selects "None" then that layer shouldn't be displayed.  Dynamically calculate the
-//zoom levels based on the chart variables
+//level 3 are supported.  Each layer has a check box and a field to identify The
+// group by field for that level.
+var mapBoundariesLevels = {};
+for(var i=0; i < 4; i++) {
+  var currEnabledVar = 'Include Admin ' + i;
+  var currGroupByVar = 'Admin ' + i + 'Group By'
+  var currLayerKey = 'adm' + i;
+  if(controller.variables[currEnabledVar]) {
+    console.log('User set ' + currEnabledVar);
+  }
+}
 var mapBoundariesLevels = {
   adm0: {
     level: 0,
     source: "admin-0",
     source_layer: "boundaries_admin_0",
     minZoom: 0,
-    maxZoom: 5,
+    maxZoom: 3,
     vtPropField: 'id',//'country_code',
     dataPropField: 'adm0_id',
     colorStops: [['', "rgba(0,255,0,.5)"]],
@@ -52,8 +61,8 @@ var mapBoundariesLevels = {
     level: 1,
     source: "admin-1",
     source_layer: "boundaries_admin_1",
-    minZoom: 5,
-    maxZoom: 9,
+    minZoom: 3,
+    maxZoom: 7,
     vtPropField: 'id',
     dataPropField: 'adm1_id',
     colorStops: [['', "rgba(128,0,0,0)"]],
@@ -62,8 +71,8 @@ var mapBoundariesLevels = {
     level: 2,
     source: "admin-2",
     source_layer: "boundaries_admin_2",
-    minZoom: 9,
-    maxZoom: 16,
+    minZoom: 7,
+    maxZoom: 12,
     vtPropField: 'id',
     dataPropField: 'adm2_id',
     colorStops: [['', "rgba(0,0,128,0)"]],
@@ -72,7 +81,7 @@ var mapBoundariesLevels = {
     level: 3,
     source: "admin-3",
     source_layer: "boundaries_admin_3",
-    minZoom: 16,
+    minZoom: 12,
     maxZoom: 22,
     vtPropField: 'id',
     dataPropField: 'adm3_id',
@@ -188,8 +197,8 @@ function configureMap() {
       currentlyVisibleLayer = visibleLayerAfterZoom;
       var currGroup = controller.dataAccessors['Group By'].getGroup();
       currGroup.name = currentlyVisibleLayer.dataPropField;
+      currGroup.limit = 200000; //TOOD: hard-coded limit to make all features appear, need to make this dynamic if we can get a count of features from Mapbox layer
       //TODO: adjust limit dynamically to the number of featuers in the layer (or number of visible features, if we can do that)
-console.log('Setting new group ', currentlyVisibleLayer.dataPropField, ' for group ', currGroup);
           controller.dataAccessors['Group By'].setGroup((currentlyVisibleLayer.dataPropField, currGroup));
       //TODO: if we are filtering then we need to update filters here
       // Changing the group by will cause controller.update, which does this: setStops(dataLookup, currentlyVisibleLayer, map.queryRenderedFeatures());
@@ -258,32 +267,15 @@ function setStops(data, layer, features) {
         var blue = parseInt(fillColor.substring(5), 16);
         var rgba = "rgba(" + red + "," + green + "," + blue + ",0.8)";
         stopsArray.push([val.group[0], rgba]);
-//      var height = dataLookup[feature.properties.GEOID].current.count < 65000 ? dataLookup[feature.properties.name].current.count : 65000;
-//      heightStopsArray.push([feature.properties.GEOID, height]);
+//TODO: right now height is hard-coded to volume.  Link to metric specified by user
+      var height = dataLookup[currAttributeKey].current.count * heightFactor < 65000 ? dataLookup[currAttributeKey].current.count * heightFactor : 65000;
+      heightStopsArray.push([val.group[0], height ]);
       }
     });
 
-/*
-    features.forEach(function(feature) {
-        //look up the color using the Zoomdata data and the Zoomdata colors
-        var currFieldName = layer.vtPropField;
-        console.log(feature.layer.id);
-        if((feature.layer.id === layer.source+'_base_fill') && (feature.properties[currFieldName] in dataLookup)) { //TODO: property name different for layers
-            console.log('found feature match:', feature.properties[currFieldName])
-              var fillColor = getMetrics().Color.color(dataLookup[feature.properties.name]);
-              var red = parseInt(fillColor.substring(1,3), 16);
-              var green = parseInt(fillColor.substring(3,5), 16);
-              var blue = parseInt(fillColor.substring(5), 16);
-              var rgba = "rgba(" + red + "," + green + "," + blue + ",1)";
-              stopsArray.push([feature.properties[currFieldName], rgba])
-              var height = dataLookup[feature.properties[currFieldName]].current.count < 65000 ? dataLookup[feature.properties[currFieldName]].current.count : 65000;
-              heightStopsArray.push([feature.properties[currFieldName], height]);
-        } else {
-//            stopsArray.push([feature.properties[currFieldName], defaultColor]);
-//            heightStopsArray.push([feature.properties[currFieldName], defaultHeight]);
-        }
-    });
-*/
+
+
+
 console.log('setting stops for layer ', layer.source+'_base_fill', " on property", layer.vtPropField);
     map.setPaintProperty(layer.source+'_base_fill', 'fill-extrusion-color', {
                   property: layer.vtPropField,
@@ -291,15 +283,15 @@ console.log('setting stops for layer ', layer.source+'_base_fill', " on property
                   stops: stopsArray,
                   default: 'lightgray'
         } );
-/*
-    map.setPaintProperty(layer.id, 'fill-extrusion-opacity', 0.5);
-    map.setPaintProperty(layer.id, 'fill-extrusion-height', {
-        property: "GEOID",
+
+    map.setPaintProperty(layer.source+'_base_fill', 'fill-extrusion-height', {
+        property: layer.vtPropField,
         type: 'categorical',
-        stops: heightStopsArray
+        stops: heightStopsArray,
+        default: 0
     })
-    */
     console.log('Stops set to ', stopsArray);
+    console.log('height stops:', heightStopsArray);
 }
 controller.resize = function(width, height, size) {
     // Called when the widget is resized
@@ -310,5 +302,12 @@ controller.createAxisLabel({
   picks: 'Color', // Variable Name
   orientation: 'horizontal',
   position: 'bottom',
-  popoverTitle: 'Metric'
+  popoverTitle: 'Color'
+});
+
+controller.createAxisLabel({
+  picks: 'Height', // Variable Name
+  orientation: 'horizontal',
+  position: 'bottom',
+  popoverTitle: 'Height'
 });
