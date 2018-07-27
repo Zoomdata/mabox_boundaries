@@ -1,0 +1,26 @@
+{
+  "adm0": {
+    "minZoom": 0,
+    "maxZoom": 3,
+    "dataPropField": "adm0_id",
+    "url": "mapbox://mapbox.enterprise-boundaries-a0-v1"
+  },
+  "adm1": {
+    "minZoom": 0,
+    "maxZoom": 3,
+    "dataPropField": "adm1_id",
+    "url": "mapbox://mapbox.enterprise-boundaries-a1-v1"
+  },
+  "adm2": {
+    "minZoom": 0,
+    "maxZoom": 3,
+    "dataPropField": "adm2_id",
+    "url": "mapbox://mapbox.enterprise-boundaries-a2-v1"
+  },
+  "adm3": {
+    "minZoom": 0,
+    "maxZoom": 3,
+    "dataPropField": "adm3_id",
+    "url": "mapbox://mapbox.enterprise-boundaries-a3-v1"
+  }
+}

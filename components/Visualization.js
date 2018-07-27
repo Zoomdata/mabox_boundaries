@@ -5,8 +5,8 @@
 
 var dataLookup = {};
 
+console.log('starting visualization, controller variables:', controller.variables);
 //load mapbox and define a target div
-
 var uuid = new Date().getTime();
 var mapVarId = 'map-' + uuid;
 var mapDiv = document.createElement('div');
@@ -27,25 +27,41 @@ mb_js.onload = function() {
     initializeMap();
 };
 
-var heightFactor = 100; //TODO: pull from chart variable so user can configure
+var heightFactor = controller.variables['Extrusion Factor'];
+console.log('extrusion factor is ', heightFactor);
+var layerOpacity = controller.variables['Opacity'];
 
 controller.element.appendChild(mb_js);
 controller.element.appendChild(mb_css);
 controller.element.appendChild(mapDiv);
 
-//The variables set in the chart properties drive what layers are displayed.  This
+//The "Layer Configuration" variable set in the chart properties drive what layers are displayed.  This
 //chart uses administrative boundaries.  Users can choose which ones, level 0 through
-//level 3 are supported.  Each layer has a check box and a field to identify The
-// group by field for that level.
-var mapBoundariesLevels = {};
-for(var i=0; i < 4; i++) {
-  var currEnabledVar = 'Include Admin ' + i;
-  var currGroupByVar = 'Admin ' + i + 'Group By'
-  var currLayerKey = 'adm' + i;
-  if(controller.variables[currEnabledVar]) {
-    console.log('User set ' + currEnabledVar);
-  }
+//level 3 are supported.  Variable must be in JSON format.
+
+var layerConfigurationString = controller.variables['Layer Configuration'];
+console.log('layerConfigurationString ', layerConfigurationString);
+try {
+var testMapBoundariesLevels = JSON.parse(layerConfigurationString);
+} catch(e) {
+  console.error("Error parsing configuration string.  Make sure the string is properly formatted JSON", e);
+  console.error("String from variable is ", layerConfigurationString);
 }
+//TODO: implement check on configuration:
+// - dataPropField exists
+// - bounds for Zoom levels (maybe)
+// - if min or max zoom not defined set it to a default value (0 or 22)
+//for each configuration set some known defaults/values
+Object.keys(testMapBoundariesLevels).forEach( function(key) {
+  testMapBoundariesLevels[key].source = key;
+  testMapBoundariesLevels[key].source_layer = 'boundaries_'+ key;
+  testMapBoundariesLevels[key].vtPropField = 'id';
+  testMapBoundariesLevels[key].colorStops= [['', "rgba(0,255,0,.5)"]];
+  testMapBoundariesLevels[key].heightStops =  [['', 0]];
+});
+
+console.log('Test Map boundaries are set to:', testMapBoundariesLevels);
+
 var mapBoundariesLevels = {
   adm0: {
     level: 0,
@@ -90,7 +106,10 @@ var mapBoundariesLevels = {
   }
 }
 
+mapBoundariesLevels = testMapBoundariesLevels;
+
 function getCurrentlyVisibleLayer() {
+  console.log('checking currently visible layer');
   var result = undefined;
   var currZoom = map.getZoom();
   //iterate through the layer configurations, find the zoom level that matches current zoom
@@ -120,16 +139,13 @@ function initializeMap() {
         //TODO: maxBounds from controller variables
     });
     map.on('load', configureMap);
-    map.on('click', function (e) {
-      var features = map.queryRenderedFeatures(e.point);
-      console.log("On click: ", features);
-    });
+
 }
 
 function configureMap() {
   var nav = new mapboxgl.NavigationControl();
   map.addControl(nav, 'top-left');
-  map.addSource("admin-0", {
+/*  map.addSource("admin-0", {
       type: "vector",
       url: "mapbox://mapbox.enterprise-boundaries-a0-v1"
   });
@@ -148,11 +164,15 @@ function configureMap() {
       type: "vector",
       url: "mapbox://mapbox.enterprise-boundaries-a3-v1"
   });
-
+*/
   Object.keys(mapBoundariesLevels).forEach(function(currKey) {
+    map.addSource(currKey, {
+      type: "vector",
+      url: mapBoundariesLevels[currKey].url
+    })
   // for each level we want a fill (extruded) and a border
     var boundary = mapBoundariesLevels[currKey];
-    console.log('Adding layer to map:', boundary.source+"_base_fill");
+    console.log('Adding layer to map:', boundary.source+"_base_fill", boundary);
     map.addLayer({
         "id": boundary.source + "_base_fill",
         "type": "fill-extrusion",
@@ -162,11 +182,11 @@ function configureMap() {
         maxzoom: boundary.maxZoom,
         "paint": {
           "fill-extrusion-color": "green",
-          "fill-extrusion-opacity": .6,
+          "fill-extrusion-opacity": layerOpacity,
           "fill-extrusion-height": 0
         }
     }, 'waterway-label');
-
+console.log('layer just added: ', map.getLayer(boundary.source+"_base_fill"));
 
       map.addLayer({
           id: boundary.source + "_layer_borders",
@@ -184,7 +204,7 @@ function configureMap() {
   });
   currentlyVisibleLayer = getCurrentlyVisibleLayer();
   console.log('At start the visible layer is', currentlyVisibleLayer);
-  setStops(dataLookup, currentlyVisibleLayer, map.queryRenderedFeatures());
+//  setStops(dataLookup, currentlyVisibleLayer, map.queryRenderedFeatures());
   //Setting the map events here, they require the layers have been
   //added already
   map.on('zoom', function() {
@@ -205,9 +225,34 @@ function configureMap() {
     }
   });
   map.on('moveend', function() {
-    console.log('Map moveend');
+//    console.log('Map moveend');
     //TODO: if we are filtering we need to update filters here
   })
+
+  // When a click event occurs on a feature in the places layer, open a popup at the
+  // location of the feature, with description HTML from its properties.
+
+  //TODO: we could have a click event listener per layer, or remove the layer name param
+  //and implement logic to determine what layer is active
+  map.on('click', /*level.source*/ 'admin-0'+'_base_fill', function (e) {
+    console.log('clicked on layer ', e);
+
+    var tooltipString = '';//TODO: get name '<B>Area Name</b><br/>'
+    var metrics = getMetrics();
+    Object.keys(metrics).forEach(function(metricKey) {
+      var val = getAreaMetric(e.features[0], metricKey);
+      tooltipString += '<b>' + metrics[metricKey].getLabel() + ':</b> ';
+      tooltipString += metrics[metricKey].format(val) + '<br/>';
+    });
+
+    //get the feature ID from the event, then we need to look up the actual values
+    //from the Zoomdata data collection
+    var featureID = e.features[0].properties.id;
+        new mapboxgl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(tooltipString)
+            .addTo(map);
+    });
 
     //map.on('mousemove', 'states_layer_base_fill', function(e) {console.log(e);});
     //setStops(dataLookup, map.getLayer('counties_base_fill'));
@@ -227,11 +272,9 @@ controller.update = function(data, progress) {
     if(map !== null) {
         var currLayer = getCurrentlyVisibleLayer();
         if(currLayer) {
-            setStops(dataLookup, currLayer, map.queryRenderedFeatures());
+//            setStops(dataLookup, currLayer, map.queryRenderedFeatures());
         }
     }
-
-
 };
 
   function getMetrics()  {
@@ -247,6 +290,29 @@ controller.update = function(data, progress) {
 
       return metrics;
   }
+
+  //Function finds the metric value associated with a specific feature
+  getAreaMetric = function(feature, metricKey) {
+    var metrics = getMetrics();
+    var metricFieldName = metrics[metricKey].getMetric().name;
+    var metricFuncName = metrics[metricKey].getMetric().func;
+    var result = -1;
+    try {
+    var polygonId = feature.properties.id;
+    //TODO: hack way to get value, need to use proper accessors
+    if (typeof(dataLookup[polygonId]) !== 'undefined') {
+      if(metricFieldName === 'count') {
+        result = dataLookup[polygonId].current.count;
+      } else {
+        result = dataLookup[polygonId].current.metrics[metricFieldName][metricFuncName];
+      }
+    }
+  } catch(e) {
+    console.error('Error getting well metric ', e);
+  }
+  //    console.log(' well metric for ', wellId, " is ", result);
+    return (result);
+  };
 
 function setStops(data, layer, features) {
   console.log('setting stops for ', layer, ' against data ', data);
@@ -267,16 +333,22 @@ function setStops(data, layer, features) {
         var blue = parseInt(fillColor.substring(5), 16);
         var rgba = "rgba(" + red + "," + green + "," + blue + ",0.8)";
         stopsArray.push([val.group[0], rgba]);
-//TODO: right now height is hard-coded to volume.  Link to metric specified by user
-      var height = dataLookup[currAttributeKey].current.count * heightFactor < 65000 ? dataLookup[currAttributeKey].current.count * heightFactor : 65000;
+        //TODO: right now height is hard-coded to volume.  Link to metric specified by user
+        var heightField = controller.variables["Height"];
+        var heightMetricFieldName = metrics.Height.getMetric().name;
+        var heightMetricFieldFunc = metrics.Height.getMetric().func;
+        var heightMetricVal;
+        if(heightMetricFieldName === 'count') {
+          heightMetricVal = dataLookup[currAttributeKey].current.count;
+        } else {
+          heightMetricVal = dataLookup[currAttributeKey].current.metrics[heightMetricFieldName][heightMetricFieldFunc];
+        }
+      var height = heightMetricVal * heightFactor < 65000 ? heightMetricVal * heightFactor : 65000;
       heightStopsArray.push([val.group[0], height ]);
       }
     });
 
 
-
-
-console.log('setting stops for layer ', layer.source+'_base_fill', " on property", layer.vtPropField);
     map.setPaintProperty(layer.source+'_base_fill', 'fill-extrusion-color', {
                   property: layer.vtPropField,
                   type: 'categorical',
@@ -290,8 +362,8 @@ console.log('setting stops for layer ', layer.source+'_base_fill', " on property
         stops: heightStopsArray,
         default: 0
     })
-    console.log('Stops set to ', stopsArray);
-    console.log('height stops:', heightStopsArray);
+//    console.log('Stops set to ', stopsArray);
+//    console.log('height stops:', heightStopsArray);
 }
 controller.resize = function(width, height, size) {
     // Called when the widget is resized
